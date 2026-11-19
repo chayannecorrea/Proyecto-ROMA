@@ -26,3 +26,28 @@
 .story-teaser img,
 .story-cover img,
 .photo-gallery img { object-position: center 16%; }
+
+
+/* Ajustes de fotografia y carrusel ROMA */
+.hero-visual > img{object-position:center 18%;}
+.featured-photo img{object-position:center 18%;}
+.story-teaser > img{object-position:center 18%;}
+.roma-story{padding-top:72px;padding-bottom:82px;border-top:1px solid var(--line);}
+.roma-story-heading{max-width:620px;margin-bottom:30px;}
+.roma-story-heading h2{margin-bottom:12px;}
+.roma-story-heading p{color:var(--muted);font-size:14px;max-width:500px;}
+.roma-carousel{max-width:940px;margin:0 auto;}
+.roma-slides{position:relative;min-height:clamp(280px,52vw,560px);background:#e9e6dc;overflow:hidden;}
+.roma-slide{display:none;position:relative;margin:0;width:100%;height:clamp(280px,52vw,560px);}
+.roma-slide.is-active{display:block;animation:romaFade .35s ease;}
+.roma-slide img{width:100%;height:100%;object-fit:contain;background:#e9e6dc;}
+.roma-slide figcaption{position:absolute;left:18px;bottom:18px;padding:9px 14px;background:#fffefaed;color:var(--ink);font:15px var(--serif);}
+.roma-carousel-controls{display:flex;align-items:center;justify-content:center;gap:22px;padding:18px 0 0;}
+.roma-carousel-controls button{cursor:pointer;}
+.roma-prev,.roma-next{width:38px;height:38px;border:1px solid var(--line);border-radius:50%;background:var(--paper);color:var(--sage-dark);font-size:18px;}
+.roma-dots{display:flex;gap:8px;align-items:center;}
+.roma-dots button{width:8px;height:8px;padding:0;border:0;border-radius:50%;background:#c8cfc5;}
+.roma-dots button.is-active{background:var(--sage-dark);transform:scale(1.3);}
+.roma-counter{font-size:10px;letter-spacing:.12em;color:var(--muted);min-width:48px;text-align:center;}
+@keyframes romaFade{from{opacity:.55}to{opacity:1}}
+@media(max-width:680px){.roma-story{padding-top:55px;padding-bottom:60px}.roma-slides,.roma-slide{height:clamp(250px,75vw,420px);min-height:0}.roma-carousel-controls{gap:14px}.roma-slide figcaption{left:10px;bottom:10px;font-size:13px}}
