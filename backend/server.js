@@ -6,13 +6,16 @@ const cookieParser = require("cookie-parser");
 const rateLimit = require("express-rate-limit");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const { Pool } = require("pg");
+const { MongoClient, ObjectId } = require("mongodb");
 
 const app = express();
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes("render.com") ? { rejectUnauthorized: false } : undefined });
 const PORT = process.env.PORT || 3000;
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || "").split(",").map(x => x.trim()).filter(Boolean);
 const geminiApiKey = process.env.GEMINI_API_KEY || "";
+const mongoClient = new MongoClient(process.env.MONGODB_URI || "");
+let db;
+let requests;
+let admins;
 
 app.set("trust proxy", 1);
 app.use(helmet());
@@ -22,19 +25,19 @@ app.use(cookieParser());
 app.use("/api/", rateLimit({ windowMs: 15 * 60 * 1000, limit: 120, standardHeaders: true, legacyHeaders: false }));
 
 async function initDb() {
-  await pool.query(`CREATE TABLE IF NOT EXISTS requests (
-    id BIGSERIAL PRIMARY KEY, type VARCHAR(30) NOT NULL, name VARCHAR(120) NOT NULL,
-    email VARCHAR(180) NOT NULL, phone VARCHAR(40), city VARCHAR(100),
-    subject VARCHAR(100), message TEXT NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'pendiente',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS admins (
-    id BIGSERIAL PRIMARY KEY, email VARCHAR(180) UNIQUE NOT NULL, password_hash TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )`);
+  if (!process.env.MONGODB_URI) throw new Error("Falta configurar MONGODB_URI.");
+  await mongoClient.connect();
+  db = mongoClient.db(process.env.MONGODB_DB_NAME || "roma");
+  await db.command({ ping: 1 });
+  requests = db.collection("requests");
+  admins = db.collection("admins");
+  await requests.createIndex({ created_at: -1 });
+  await requests.createIndex({ type: 1, status: 1 });
+  await admins.createIndex({ email: 1 }, { unique: true });
   if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+    const email = process.env.ADMIN_EMAIL.toLowerCase().trim();
     const hash = await bcrypt.hash(process.env.ADMIN_PASSWORD, 12);
-    await pool.query("INSERT INTO admins(email,password_hash) VALUES($1,$2) ON CONFLICT(email) DO NOTHING", [process.env.ADMIN_EMAIL.toLowerCase(), hash]);
+    await admins.updateOne({ email }, { $setOnInsert: { email, password_hash: hash, created_at: new Date() } }, { upsert: true });
   }
 }
 
@@ -44,57 +47,121 @@ function requireAdmin(req, res, next) {
     if (!token) return res.status(401).json({ error: "Iniciá sesión para continuar." });
     req.admin = jwt.verify(token, process.env.JWT_SECRET);
     next();
-  } catch { res.clearCookie("roma_session"); return res.status(401).json({ error: "La sesión venció. Volvé a ingresar." }); }
+  } catch {
+    res.clearCookie("roma_session");
+    return res.status(401).json({ error: "La sesión venció. Volvé a ingresar." });
+  }
 }
 const clean = value => String(value || "").trim();
-app.get("/api/health", async (req,res) => { try { await pool.query("SELECT 1"); res.json({ status:"ok", service:"ROMA API", database:"connected" }); } catch { res.status(503).json({ status:"error", database:"unavailable" }); } });
 
-app.post("/api/requests", async (req,res) => {
-  const { type="contacto", name, email, phone="", city="", subject="", message } = req.body || {};
-  if (!["contacto","adopcion","transitorio"].includes(type)) return res.status(400).json({error:"Tipo de solicitud inválido."});
-  if (!clean(name) || !/^\S+@\S+\.\S+$/.test(clean(email)) || !clean(message)) return res.status(400).json({error:"Completá nombre, un correo válido y el mensaje."});
-  if (clean(name).length>120 || clean(email).length>180 || clean(message).length>4000) return res.status(400).json({error:"Revisá la longitud de los campos."});
+app.get("/api/health", async (req, res) => {
   try {
-    const q=await pool.query("INSERT INTO requests(type,name,email,phone,city,subject,message) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,created_at", [type,clean(name),clean(email).toLowerCase(),clean(phone),clean(city),clean(subject),clean(message)]);
-    res.status(201).json({message:"¡Gracias! Tu solicitud fue recibida por ROMA.",request:q.rows[0]});
-  } catch(err) { console.error(err); res.status(500).json({error:"No pudimos registrar tu solicitud. Intentá nuevamente."}); }
+    await db.command({ ping: 1 });
+    res.json({ status: "ok", service: "ROMA API", database: "connected" });
+  } catch {
+    res.status(503).json({ status: "error", database: "unavailable" });
+  }
 });
 
-app.post("/api/admin/login", rateLimit({windowMs:15*60*1000,limit:8}), async (req,res) => {
-  const email=clean(req.body?.email).toLowerCase(), password=String(req.body?.password||"");
-  if(!email || !password) return res.status(400).json({error:"Ingresá correo y contraseña."});
+app.post("/api/requests", async (req, res) => {
+  const { type = "contacto", name, email, phone = "", city = "", subject = "", message } = req.body || {};
+  if (!["contacto", "adopcion", "transitorio"].includes(type)) return res.status(400).json({ error: "Tipo de solicitud inválido." });
+  if (!clean(name) || !/^\\S+@\\S+\\.\\S+$/.test(clean(email)) || !clean(message)) return res.status(400).json({ error: "Completá nombre, un correo válido y el mensaje." });
+  if (clean(name).length > 120 || clean(email).length > 180 || clean(message).length > 4000) return res.status(400).json({ error: "Revisá la longitud de los campos." });
   try {
-    const q=await pool.query("SELECT id,email,password_hash FROM admins WHERE email=$1",[email]);
-    const admin=q.rows[0];
-    if(!admin || !(await bcrypt.compare(password,admin.password_hash))) return res.status(401).json({error:"Correo o contraseña incorrectos."});
-    const token=jwt.sign({id:admin.id,email:admin.email},process.env.JWT_SECRET,{expiresIn:"8h"});
-    res.cookie("roma_session",token,{httpOnly:true,secure:process.env.NODE_ENV==="production",sameSite:process.env.NODE_ENV==="production"?"none":"lax",maxAge:8*60*60*1000});
-    res.json({admin:{email:admin.email}});
-  } catch(err) { console.error(err); res.status(500).json({error:"No se pudo iniciar sesión."}); }
+    const document = {
+      type, name: clean(name), email: clean(email).toLowerCase(), phone: clean(phone),
+      city: clean(city), subject: clean(subject), message: clean(message),
+      status: "pendiente", created_at: new Date()
+    };
+    const result = await requests.insertOne(document);
+    res.status(201).json({ message: "¡Gracias! Tu solicitud fue recibida por ROMA.", request: { id: result.insertedId.toString(), created_at: document.created_at } });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "No pudimos registrar tu solicitud. Intentá nuevamente." });
+  }
 });
-app.post("/api/admin/logout",(req,res)=>{res.clearCookie("roma_session",{httpOnly:true,secure:process.env.NODE_ENV==="production",sameSite:process.env.NODE_ENV==="production"?"none":"lax"});res.json({message:"Sesión cerrada."});});
-app.get("/api/admin/me",requireAdmin,(req,res)=>res.json({admin:req.admin}));
-app.get("/api/admin/requests",requireAdmin,async(req,res)=>{try{const q=await pool.query("SELECT id,type,name,email,phone,city,subject,message,status,created_at FROM requests ORDER BY created_at DESC");res.json({requests:q.rows});}catch(err){console.error(err);res.status(500).json({error:"No se pudieron cargar las solicitudes."});}});
-app.patch("/api/admin/requests/:id",requireAdmin,async(req,res)=>{const status=clean(req.body?.status);if(!["pendiente","en_revision","resuelta"].includes(status))return res.status(400).json({error:"Estado inválido."});try{const q=await pool.query("UPDATE requests SET status=$1 WHERE id=$2 RETURNING id,status",[status,req.params.id]);if(!q.rowCount)return res.status(404).json({error:"Solicitud no encontrada."});res.json({request:q.rows[0]});}catch(err){console.error(err);res.status(500).json({error:"No se pudo actualizar."});}});
-app.post("/api/assistant",rateLimit({windowMs:60*1000,limit:15}),async(req,res)=>{
-  const question=clean(req.body?.question);
-  if(!question || question.length>1000)return res.status(400).json({error:"Escribí una consulta de hasta 1000 caracteres."});
-  if(!geminiApiKey)return res.status(503).json({error:"El asistente IA aún no está configurado. El equipo puede activarlo agregando GEMINI_API_KEY al servidor."});
-  try{
-    const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${process.env.GEMINI_MODEL||"gemini-2.5-flash"}:generateContent?key=${geminiApiKey}`,{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({
-        systemInstruction:{parts:[{text:"Sos el asistente virtual de ROMA, un proyecto de rescate y adopción responsable de Paysandú, Uruguay. Respondé en español rioplatense, cálido, claro y breve. Orientá sobre adopción responsable, hogares transitorios y colaboración. No inventes disponibilidad, requisitos particulares ni datos de contacto no confirmados. Para iniciar una solicitud, indicá que completen el formulario del sitio. No des consejos veterinarios de urgencia; recomendá consultar un veterinario."}]},
-        contents:[{role:"user",parts:[{text:question}]}],
-        generationConfig:{maxOutputTokens:260,temperature:0.5}
+
+app.post("/api/admin/login", rateLimit({ windowMs: 15 * 60 * 1000, limit: 8 }), async (req, res) => {
+  const email = clean(req.body?.email).toLowerCase(), password = String(req.body?.password || "");
+  if (!email || !password) return res.status(400).json({ error: "Ingresá correo y contraseña." });
+  try {
+    const admin = await admins.findOne({ email });
+    if (!admin || !(await bcrypt.compare(password, admin.password_hash))) return res.status(401).json({ error: "Correo o contraseña incorrectos." });
+    const token = jwt.sign({ id: admin._id.toString(), email: admin.email }, process.env.JWT_SECRET, { expiresIn: "8h" });
+    res.cookie("roma_session", token, { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: process.env.NODE_ENV === "production" ? "none" : "lax", maxAge: 8 * 60 * 60 * 1000 });
+    res.json({ admin: { email: admin.email } });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "No se pudo iniciar sesión." });
+  }
+});
+
+app.post("/api/admin/logout", (req, res) => {
+  res.clearCookie("roma_session", { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: process.env.NODE_ENV === "production" ? "none" : "lax" });
+  res.json({ message: "Sesión cerrada." });
+});
+app.get("/api/admin/me", requireAdmin, (req, res) => res.json({ admin: req.admin }));
+
+app.get("/api/admin/requests", requireAdmin, async (req, res) => {
+  try {
+    const rows = await requests.find({}, { projection: { type: 1, name: 1, email: 1, phone: 1, city: 1, subject: 1, message: 1, status: 1, created_at: 1 } }).sort({ created_at: -1 }).toArray();
+    res.json({ requests: rows.map(row => ({ id: row._id.toString(), type: row.type, name: row.name, email: row.email, phone: row.phone, city: row.city, subject: row.subject, message: row.message, status: row.status, created_at: row.created_at })) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "No se pudieron cargar las solicitudes." });
+  }
+});
+
+app.patch("/api/admin/requests/:id", requireAdmin, async (req, res) => {
+  const status = clean(req.body?.status);
+  if (!["pendiente", "en_revision", "resuelta"].includes(status)) return res.status(400).json({ error: "Estado inválido." });
+  if (!ObjectId.isValid(req.params.id)) return res.status(404).json({ error: "Solicitud no encontrada." });
+  try {
+    const result = await requests.updateOne({ _id: new ObjectId(req.params.id) }, { $set: { status } });
+    if (!result.matchedCount) return res.status(404).json({ error: "Solicitud no encontrada." });
+    res.json({ request: { id: req.params.id, status } });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "No se pudo actualizar." });
+  }
+});
+
+app.post("/api/assistant", rateLimit({ windowMs: 60 * 1000, limit: 15 }), async (req, res) => {
+  const question = clean(req.body?.question);
+  if (!question || question.length > 1000) return res.status(400).json({ error: "Escribí una consulta de hasta 1000 caracteres." });
+  if (!geminiApiKey) return res.status(503).json({ error: "El asistente IA aún no está configurado. El equipo puede activarlo agregando GEMINI_API_KEY al servidor." });
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${process.env.GEMINI_MODEL || "gemini-2.5-flash"}:generateContent?key=${geminiApiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: "Sos el asistente virtual de ROMA, un proyecto de rescate y adopción responsable de Paysandú, Uruguay. Respondé en español rioplatense, cálido, claro y breve. Orientá sobre adopción responsable, hogares transitorios y colaboración. No inventes disponibilidad, requisitos particulares ni datos de contacto no confirmados. Para iniciar una solicitud, indicá que completen el formulario del sitio. No des consejos veterinarios de urgencia; recomendá consultar un veterinario." }] },
+        contents: [{ role: "user", parts: [{ text: question }] }],
+        generationConfig: { maxOutputTokens: 260, temperature: 0.5 }
       })
     });
-    const data=await response.json();
-    if(!response.ok){console.error("Gemini API:",data);return res.status(502).json({error:"El asistente no está disponible en este momento."});}
-    const answer=data.candidates?.[0]?.content?.parts?.map(part=>part.text||"").join("").trim();
-    res.json({answer:answer||"No pude preparar una respuesta. Probá nuevamente."});
-  }catch(err){console.error(err);res.status(502).json({error:"El asistente no está disponible en este momento."});}
+    const data = await response.json();
+    if (!response.ok) {
+      console.error("Gemini API:", data);
+      return res.status(502).json({ error: "El asistente no está disponible en este momento." });
+    }
+    const answer = data.candidates?.[0]?.content?.parts?.map(part => part.text || "").join("").trim();
+    res.json({ answer: answer || "No pude preparar una respuesta. Probá nuevamente." });
+  } catch (err) {
+    console.error(err);
+    res.status(502).json({ error: "El asistente no está disponible en este momento." });
+  }
 });
-app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:"Ocurrió un error inesperado."});});
-initDb().then(()=>app.listen(PORT,()=>console.log("ROMA API escuchando en "+PORT))).catch(err=>{console.error("No se pudo inicializar la base de datos",err);process.exit(1);});
+
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: "Ocurrió un error inesperado." });
+});
+
+initDb()
+  .then(() => app.listen(PORT, () => console.log("ROMA API conectada a MongoDB y escuchando en " + PORT)))
+  .catch(err => {
+    console.error("No se pudo inicializar MongoDB:", err);
+    process.exit(1);
+  });
