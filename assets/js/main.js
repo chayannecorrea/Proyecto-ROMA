@@ -21,4 +21,15 @@ document.addEventListener("DOMContentLoaded",()=>{
    catch{bot.textContent="No pude conectar con el asistente. Intentá nuevamente más tarde.";}messages.scrollTop=messages.scrollHeight;
   });
  }
+ const romaCarousel=document.querySelector("[data-roma-carousel]");
+ if(romaCarousel){
+  const slides=[...romaCarousel.querySelectorAll(".roma-slide")],dots=[...romaCarousel.querySelectorAll(".roma-dots button")],counter=romaCarousel.querySelector(".roma-counter");
+  let current=0;
+  const show=(index)=>{current=(index+slides.length)%slides.length;slides.forEach((slide,i)=>{slide.classList.toggle("is-active",i===current);slide.setAttribute("aria-hidden",String(i!==current));});dots.forEach((dot,i)=>{dot.classList.toggle("is-active",i===current);dot.setAttribute("aria-pressed",String(i===current));});if(counter)counter.textContent=String(current+1).padStart(2,"0")+" / "+String(slides.length).padStart(2,"0");};
+  romaCarousel.querySelector(".roma-prev")?.addEventListener("click",()=>show(current-1));
+  romaCarousel.querySelector(".roma-next")?.addEventListener("click",()=>show(current+1));
+  dots.forEach((dot,i)=>dot.addEventListener("click",()=>show(i)));
+  show(0);
+ }
+
 });
