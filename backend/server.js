@@ -7,13 +7,12 @@ const rateLimit = require("express-rate-limit");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { Pool } = require("pg");
-const OpenAI = require("openai");
 
 const app = express();
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes("render.com") ? { rejectUnauthorized: false } : undefined });
 const PORT = process.env.PORT || 3000;
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || "").split(",").map(x => x.trim()).filter(Boolean);
-const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+const geminiApiKey = process.env.GEMINI_API_KEY || "";
 
 app.set("trust proxy", 1);
 app.use(helmet());
@@ -69,22 +68,32 @@ app.post("/api/admin/login", rateLimit({windowMs:15*60*1000,limit:8}), async (re
     const admin=q.rows[0];
     if(!admin || !(await bcrypt.compare(password,admin.password_hash))) return res.status(401).json({error:"Correo o contraseña incorrectos."});
     const token=jwt.sign({id:admin.id,email:admin.email},process.env.JWT_SECRET,{expiresIn:"8h"});
-    res.cookie("roma_session",token,{httpOnly:true,secure:process.env.NODE_ENV==="production",sameSite:"lax",maxAge:8*60*60*1000});
+    res.cookie("roma_session",token,{httpOnly:true,secure:process.env.NODE_ENV==="production",sameSite:process.env.NODE_ENV==="production"?"none":"lax",maxAge:8*60*60*1000});
     res.json({admin:{email:admin.email}});
   } catch(err) { console.error(err); res.status(500).json({error:"No se pudo iniciar sesión."}); }
 });
-app.post("/api/admin/logout",(req,res)=>{res.clearCookie("roma_session",{httpOnly:true,secure:process.env.NODE_ENV==="production",sameSite:"lax"});res.json({message:"Sesión cerrada."});});
+app.post("/api/admin/logout",(req,res)=>{res.clearCookie("roma_session",{httpOnly:true,secure:process.env.NODE_ENV==="production",sameSite:process.env.NODE_ENV==="production"?"none":"lax"});res.json({message:"Sesión cerrada."});});
 app.get("/api/admin/me",requireAdmin,(req,res)=>res.json({admin:req.admin}));
 app.get("/api/admin/requests",requireAdmin,async(req,res)=>{try{const q=await pool.query("SELECT id,type,name,email,phone,city,subject,message,status,created_at FROM requests ORDER BY created_at DESC");res.json({requests:q.rows});}catch(err){console.error(err);res.status(500).json({error:"No se pudieron cargar las solicitudes."});}});
 app.patch("/api/admin/requests/:id",requireAdmin,async(req,res)=>{const status=clean(req.body?.status);if(!["pendiente","en_revision","resuelta"].includes(status))return res.status(400).json({error:"Estado inválido."});try{const q=await pool.query("UPDATE requests SET status=$1 WHERE id=$2 RETURNING id,status",[status,req.params.id]);if(!q.rowCount)return res.status(404).json({error:"Solicitud no encontrada."});res.json({request:q.rows[0]});}catch(err){console.error(err);res.status(500).json({error:"No se pudo actualizar."});}});
 app.post("/api/assistant",rateLimit({windowMs:60*1000,limit:15}),async(req,res)=>{
   const question=clean(req.body?.question);
   if(!question || question.length>1000)return res.status(400).json({error:"Escribí una consulta de hasta 1000 caracteres."});
-  if(!openai)return res.status(503).json({error:"El asistente IA aún no está configurado. El equipo puede activarlo agregando OPENAI_API_KEY al servidor."});
-  try{const completion=await openai.chat.completions.create({model:process.env.OPENAI_MODEL||"gpt-4o-mini",messages:[
-    {role:"system",content:"Sos el asistente virtual de ROMA, un proyecto de rescate y adopción responsable de Paysandú, Uruguay. Respondé en español rioplatense, cálido, claro y breve. Orientá sobre adopción responsable, hogares transitorios y colaboración. No inventes disponibilidad, requisitos particulares ni datos de contacto no confirmados. Para iniciar una solicitud, indicá que completen el formulario del sitio. No des consejos veterinarios de urgencia; recomendá consultar un veterinario."},
-    {role:"user",content:question}],max_tokens:260,temperature:0.5});
-    res.json({answer:completion.choices[0]?.message?.content||"No pude preparar una respuesta. Probá nuevamente."});
+  if(!geminiApiKey)return res.status(503).json({error:"El asistente IA aún no está configurado. El equipo puede activarlo agregando GEMINI_API_KEY al servidor."});
+  try{
+    const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${process.env.GEMINI_MODEL||"gemini-2.5-flash"}:generateContent?key=${geminiApiKey}`,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        systemInstruction:{parts:[{text:"Sos el asistente virtual de ROMA, un proyecto de rescate y adopción responsable de Paysandú, Uruguay. Respondé en español rioplatense, cálido, claro y breve. Orientá sobre adopción responsable, hogares transitorios y colaboración. No inventes disponibilidad, requisitos particulares ni datos de contacto no confirmados. Para iniciar una solicitud, indicá que completen el formulario del sitio. No des consejos veterinarios de urgencia; recomendá consultar un veterinario."}]},
+        contents:[{role:"user",parts:[{text:question}]}],
+        generationConfig:{maxOutputTokens:260,temperature:0.5}
+      })
+    });
+    const data=await response.json();
+    if(!response.ok){console.error("Gemini API:",data);return res.status(502).json({error:"El asistente no está disponible en este momento."});}
+    const answer=data.candidates?.[0]?.content?.parts?.map(part=>part.text||"").join("").trim();
+    res.json({answer:answer||"No pude preparar una respuesta. Probá nuevamente."});
   }catch(err){console.error(err);res.status(502).json({error:"El asistente no está disponible en este momento."});}
 });
 app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:"Ocurrió un error inesperado."});});
