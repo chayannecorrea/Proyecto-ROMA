@@ -30,9 +30,9 @@ document.addEventListener("DOMContentLoaded",()=>{
   romaCarousel.querySelector(".roma-next")?.addEventListener("click",()=>show(current+1));
   dots.forEach((dot,i)=>dot.addEventListener("click",()=>show(i)));
   // Avance automático, pausado mientras la persona interactúa con el carrusel.
-  let autoplay=setInterval(()=>show(current+1),4500);
+  let autoplay=setInterval(()=>show(current+1),3200);
   const pause=()=>{if(autoplay){clearInterval(autoplay);autoplay=null;}};
-  const resume=()=>{if(!autoplay&&!window.matchMedia("(prefers-reduced-motion: reduce)").matches){autoplay=setInterval(()=>show(current+1),4500);}};
+  const resume=()=>{if(!autoplay&&!window.matchMedia("(prefers-reduced-motion: reduce)").matches){autoplay=setInterval(()=>show(current+1),3200);}};
   romaCarousel.addEventListener("mouseenter",pause);
   romaCarousel.addEventListener("mouseleave",resume);
   romaCarousel.addEventListener("focusin",pause);
