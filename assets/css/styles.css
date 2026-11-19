@@ -17,3 +17,12 @@
 .roma-counter{font-size:10px;letter-spacing:.1em;color:var(--muted);font-variant-numeric:tabular-nums}
 @keyframes romaFade{from{opacity:.45}to{opacity:1}}
 @media(max-width:680px){.roma-story{grid-template-columns:1fr;gap:22px}.roma-slides{aspect-ratio:3/4}.roma-slide img{object-fit:contain}.roma-carousel{padding:8px}.roma-counter{margin-left:auto}}
+
+/* Encuadre fotográfico: prioriza las caras y evita cortar las cabezas. */
+.hero-visual > img,
+.featured-photo img,
+.pet-image img,
+.detail-photo img { object-position: center 18%; }
+.story-teaser img,
+.story-cover img,
+.photo-gallery img { object-position: center 16%; }
