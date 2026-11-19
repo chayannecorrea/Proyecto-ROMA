@@ -29,7 +29,18 @@ document.addEventListener("DOMContentLoaded",()=>{
   romaCarousel.querySelector(".roma-prev")?.addEventListener("click",()=>show(current-1));
   romaCarousel.querySelector(".roma-next")?.addEventListener("click",()=>show(current+1));
   dots.forEach((dot,i)=>dot.addEventListener("click",()=>show(i)));
+  // Avance automático, pausado mientras la persona interactúa con el carrusel.
+  let autoplay=setInterval(()=>show(current+1),4500);
+  const pause=()=>{if(autoplay){clearInterval(autoplay);autoplay=null;}};
+  const resume=()=>{if(!autoplay&&!window.matchMedia("(prefers-reduced-motion: reduce)").matches){autoplay=setInterval(()=>show(current+1),4500);}};
+  romaCarousel.addEventListener("mouseenter",pause);
+  romaCarousel.addEventListener("mouseleave",resume);
+  romaCarousel.addEventListener("focusin",pause);
+  romaCarousel.addEventListener("focusout",resume);
+  romaCarousel.addEventListener("touchstart",pause,{passive:true});
+  romaCarousel.addEventListener("touchend",resume,{passive:true});
   show(0);
+  resume();
  }
 
 });
