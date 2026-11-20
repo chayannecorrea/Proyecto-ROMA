@@ -10,7 +10,7 @@ Plataforma digital de adopción responsable y hogares transitorios en Paysandú,
 - MongoDB para guardar solicitudes y administradores; sesiones administrativas protegidas mediante cookie HttpOnly.
 
 ## Estructura
-- `index.html`, `adoptar.html`, `violeta.html`, `historias.html`, `hogartransitorio.html`, `contacto.html`: frontend estático.
+- `index.html`, `adopciones.html`, `violeta.html`, `historias.html`, `hogar-transitorio.html`, `contacto.html`: frontend estático.
 - `assets/css` y `assets/js`: estilos y comportamiento del frontend.
 - `admin/`: login y panel de gestión.
 - `backend/`: API Express, conexión MongoDB y asistente Google Gemini.
@@ -29,7 +29,7 @@ URL: https://chayannecorrea.github.io/Proyecto-ROMA/
 4. En Render, crear el servicio web desde este repositorio y usar `render.yaml`.
 5. Completar `MONGODB_URI`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` y `GEMINI_API_KEY` en las variables de entorno.
 6. Mantener `MONGODB_DB_NAME=roma` y configurar `FRONTEND_ORIGIN` con el origen del sitio GitHub Pages.
-7. Esperar el despliegue y comprobar `/api/health`. Si Render asigna otro dominio, reemplazar `https://roma-api.onrender.com` en `assets/js/main.js` y `assets/js/admin.js` por la URL real del servicio.
+7. Esperar el despliegue y comprobar `/api/health`. Si Render asigna otro dominio, reemplazar `https://roma-api.onrender.com` en `assets/js/funciones.js` y `assets/js/administracion.js` por la URL real del servicio.
 
 La API crea automáticamente las colecciones e índices necesarios al iniciar y crea el administrador inicial si las variables `ADMIN_EMAIL` y `ADMIN_PASSWORD` están configuradas.
 
